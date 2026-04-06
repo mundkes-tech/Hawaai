@@ -1,5 +1,6 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { useParams, Navigate, useNavigate, Link } from 'react-router-dom';
+import { ChevronDown, ShieldCheck, Truck, RotateCcw, MessageSquare } from 'lucide-react';
 import MainLayout from '../layouts/MainLayout';
 import ImageGallery from '../components/ImageGallery';
 import CountdownTimer from '../components/CountdownTimer';
@@ -19,6 +20,7 @@ const ProductPage = () => {
   const [queueMessage, setQueueMessage] = useState('');
   const [viewerCount, setViewerCount] = useState(0);
   const [queueState, setQueueState] = useState({ size: 0, queue: [] });
+  const [openFaq, setOpenFaq] = useState(0);
 
   const product = useMemo(() => products.find((item) => String(item.id) === String(id)), [products, id]);
   const productId = String(id);
@@ -30,6 +32,21 @@ const ProductPage = () => {
     if (!product) return [];
     return products.filter((p) => String(p.id) !== String(product.id) && String(p.categoryId) === String(product.categoryId)).slice(0, 4);
   }, [products, product]);
+
+  const faqItems = useMemo(() => ([
+    {
+      q: 'How fast will this product be delivered?',
+      a: 'Orders are typically dispatched within 24-48 hours after confirmation. Delivery timelines vary by location and carrier network.',
+    },
+    {
+      q: 'Can I return or exchange this item?',
+      a: 'Yes, eligible products can be returned within the platform policy window. Ensure the item is unused and in original condition.',
+    },
+    {
+      q: 'How does drop availability work?',
+      a: 'For scheduled drops, stock becomes purchasable at launch time. You can join queue or set reminders before the drop starts.',
+    },
+  ]), []);
 
   useEffect(() => {
     let isActive = true;
@@ -138,6 +155,14 @@ const ProductPage = () => {
             )}
 
             <p className="text-sm text-slate-600">Stock: {product.stock}</p>
+
+            <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 md:grid-cols-2">
+              <div className="flex items-center gap-2"><ShieldCheck size={16} className="text-emerald-600" /> Secure checkout</div>
+              <div className="flex items-center gap-2"><Truck size={16} className="text-indigo-600" /> Fast dispatch</div>
+              <div className="flex items-center gap-2"><RotateCcw size={16} className="text-amber-600" /> Easy returns</div>
+              <div className="flex items-center gap-2"><MessageSquare size={16} className="text-sky-600" /> Live support</div>
+            </div>
+
             {hasDrop && (
               <>
                 <p className="text-sm text-slate-600">Live viewers: {viewerCount}</p>
@@ -229,8 +254,31 @@ const ProductPage = () => {
         </div>
       </SectionContainer>
 
+      <SectionContainer title="FAQ" subtitle="Everything you should know before placing your order" className="bg-white border-t border-slate-100">
+        <div className="rd-card p-4 md:p-6">
+          <div className="space-y-3">
+            {faqItems.map((item, index) => {
+              const isOpen = openFaq === index;
+              return (
+                <article key={item.q} className="rounded-xl border border-slate-200 bg-white">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between px-4 py-3 text-left"
+                    onClick={() => setOpenFaq((prev) => (prev === index ? -1 : index))}
+                  >
+                    <span className="text-sm font-semibold text-[#1E1B6A] md:text-base">{item.q}</span>
+                    <ChevronDown size={16} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isOpen && <p className="px-4 pb-4 text-sm text-slate-600">{item.a}</p>}
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </SectionContainer>
+
       {similarProducts.length > 0 && (
-        <SectionContainer title="Similar Products" className="bg-[#F8FAFC] border-t border-[#F2D3A3]/30">
+        <SectionContainer title="Related Products" subtitle="You might also like these picks from the same category" className="bg-[#F8FAFC] border-t border-[#F2D3A3]/30">
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {similarProducts.map((similar) => (
               <ProductCard key={similar.id} product={similar} />

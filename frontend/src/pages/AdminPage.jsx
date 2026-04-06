@@ -45,6 +45,7 @@ const AdminPage = () => {
   const { products, categories, orders, actions, currentUser } = useRocketDrop();
   const [params] = useSearchParams();
   const tab = params.get('tab') || 'dashboard';
+  const [analyticsWindow, setAnalyticsWindow] = useState('30d');
 
   const [productForm, setProductForm] = useState({ name: '', description: '', price: '', stock: '', categoryId: '', dropTime: '' });
   const [categoryForm, setCategoryForm] = useState({ name: '' });
@@ -57,16 +58,87 @@ const AdminPage = () => {
   const [categoryImageKey, setCategoryImageKey] = useState(0);
   const [dropScheduleForm, setDropScheduleForm] = useState({ productId: '', dropTime: '' });
   const [dropScheduleErrors, setDropScheduleErrors] = useState({});
+  const [coupons, setCoupons] = useState([]);
+  const [couponForm, setCouponForm] = useState({
+    code: '',
+    discountPercentage: '',
+    active: true,
+    validFrom: '',
+    validTo: '',
+  });
+  const [couponErrors, setCouponErrors] = useState({});
+  const [editingCouponId, setEditingCouponId] = useState(null);
+  const [loadingCoupons, setLoadingCoupons] = useState(false);
   const productFormRef = useRef(null);
 
-  const revenue = useMemo(() => orders.reduce((sum, order) => sum + Number(order.totalPrice || 0), 0), [orders]);
-  const recentOrders = useMemo(() => [...orders].slice(-6).reverse(), [orders]);
+  const filteredOrders = useMemo(() => {
+    if (analyticsWindow === 'all') return orders;
+
+    const now = Date.now();
+    const days = analyticsWindow === '7d' ? 7 : analyticsWindow === '30d' ? 30 : 90;
+    const threshold = now - days * 24 * 60 * 60 * 1000;
+
+    return orders.filter((order) => {
+      const time = new Date(order.createdAt || order.updatedAt || 0).getTime();
+      return Number.isFinite(time) && time >= threshold;
+    });
+  }, [orders, analyticsWindow]);
+
+  const revenue = useMemo(() => filteredOrders.reduce((sum, order) => sum + Number(order.totalPrice || 0), 0), [filteredOrders]);
+  const recentOrders = useMemo(() => [...filteredOrders].slice(-6).reverse(), [filteredOrders]);
+  const averageOrderValue = useMemo(() => {
+    if (!filteredOrders.length) return 0;
+    return Math.round(revenue / filteredOrders.length);
+  }, [filteredOrders, revenue]);
+
+  const fulfillmentRate = useMemo(() => {
+    if (!filteredOrders.length) return 0;
+    const delivered = filteredOrders.filter((order) => String(order.status).toUpperCase() === 'DELIVERED').length;
+    return Math.round((delivered / filteredOrders.length) * 100);
+  }, [filteredOrders]);
+
+  const orderStatusBreakdown = useMemo(() => {
+    const totals = filteredOrders.reduce((acc, order) => {
+      const key = String(order.status || 'UNKNOWN').toUpperCase();
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    return Object.entries(totals)
+      .map(([status, count]) => ({ status, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [filteredOrders]);
+
+  const topSellingProducts = useMemo(() => {
+    const bucket = new Map();
+
+    filteredOrders.forEach((order) => {
+      (order.items || []).forEach((item) => {
+        const id = item.productId || item.product?.id;
+        if (!id) return;
+        const prev = bucket.get(id) || {
+          id,
+          name: item.product?.name || `Product #${id}`,
+          units: 0,
+          revenue: 0,
+        };
+
+        prev.units += Number(item.quantity || 0);
+        prev.revenue += Number(item.price || 0) * Number(item.quantity || 0);
+        bucket.set(id, prev);
+      });
+    });
+
+    return Array.from(bucket.values())
+      .sort((a, b) => b.units - a.units)
+      .slice(0, 5);
+  }, [filteredOrders]);
 
   const weeklyOrderSeries = useMemo(() => {
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const base = Array.from({ length: 7 }, (_, index) => ({ label: days[index], value: 0 }));
 
-    orders.forEach((order) => {
+    filteredOrders.forEach((order) => {
       const date = new Date(order.createdAt || order.updatedAt || '1970-01-01T00:00:00Z');
       const day = date.getDay();
       const normalized = day === 0 ? 6 : day - 1;
@@ -74,7 +146,7 @@ const AdminPage = () => {
     });
 
     return base;
-  }, [orders]);
+  }, [filteredOrders]);
 
   const peakWeeklyValue = useMemo(() => {
     const max = Math.max(...weeklyOrderSeries.map((item) => item.value), 1);
@@ -82,6 +154,33 @@ const AdminPage = () => {
   }, [weeklyOrderSeries]);
 
   const isEditingProduct = editingProductId !== null;
+  const isEditingCoupon = editingCouponId !== null;
+
+  useEffect(() => {
+    if (tab !== 'coupons') return;
+
+    let isMounted = true;
+    const loadCoupons = async () => {
+      try {
+        setLoadingCoupons(true);
+        const result = await actions.adminGetCoupons();
+        if (isMounted) {
+          setCoupons(result || []);
+        }
+      } catch (error) {
+        console.error(error?.response?.data?.message || 'Failed to load coupons');
+      } finally {
+        if (isMounted) {
+          setLoadingCoupons(false);
+        }
+      }
+    };
+
+    loadCoupons();
+    return () => {
+      isMounted = false;
+    };
+  }, [tab, actions]);
 
   if (!isAdminUser(currentUser)) return <Navigate to="/" replace />;
 
@@ -263,6 +362,95 @@ const AdminPage = () => {
     }
   };
 
+  const validateCouponForm = () => {
+    const errors = {};
+    if (!couponForm.code.trim()) errors.code = 'Coupon code is required';
+    if (!couponForm.discountPercentage || Number(couponForm.discountPercentage) < 1 || Number(couponForm.discountPercentage) > 80) {
+      errors.discountPercentage = 'Discount must be between 1 and 80';
+    }
+    if (couponForm.validFrom && couponForm.validTo) {
+      const from = new Date(couponForm.validFrom).getTime();
+      const to = new Date(couponForm.validTo).getTime();
+      if (Number.isFinite(from) && Number.isFinite(to) && to < from) {
+        errors.validTo = 'Valid to must be after valid from';
+      }
+    }
+    return errors;
+  };
+
+  const toUtcISOString = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  };
+
+  const resetCouponForm = () => {
+    setCouponForm({ code: '', discountPercentage: '', active: true, validFrom: '', validTo: '' });
+    setCouponErrors({});
+    setEditingCouponId(null);
+  };
+
+  const startEditCoupon = (coupon) => {
+    setEditingCouponId(coupon.id);
+    setCouponForm({
+      code: coupon.code || '',
+      discountPercentage: String(coupon.discountPercentage ?? ''),
+      active: Boolean(coupon.active),
+      validFrom: toLocalDateTimeInput(coupon.validFrom),
+      validTo: toLocalDateTimeInput(coupon.validTo),
+    });
+    setCouponErrors({});
+  };
+
+  const submitCoupon = async (event) => {
+    event.preventDefault();
+    const errors = validateCouponForm();
+    setCouponErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    const payload = {
+      code: couponForm.code.trim().toUpperCase(),
+      discountPercentage: Number(couponForm.discountPercentage),
+      active: Boolean(couponForm.active),
+      validFrom: toUtcISOString(couponForm.validFrom),
+      validTo: toUtcISOString(couponForm.validTo),
+    };
+
+    try {
+      const updatedCoupons = isEditingCoupon
+        ? await actions.adminUpdateCoupon(editingCouponId, payload)
+        : await actions.adminCreateCoupon(payload);
+      setCoupons(updatedCoupons || []);
+      resetCouponForm();
+    } catch (error) {
+      console.error(error?.response?.data?.message || 'Failed to save coupon');
+    }
+  };
+
+  const toggleCouponStatus = async (coupon) => {
+    try {
+      const updatedCoupons = await actions.adminUpdateCoupon(coupon.id, {
+        active: !coupon.active,
+      });
+      setCoupons(updatedCoupons || []);
+    } catch (error) {
+      console.error(error?.response?.data?.message || 'Failed to update coupon status');
+    }
+  };
+
+  const deleteCoupon = async (couponId) => {
+    try {
+      const updatedCoupons = await actions.adminDeleteCoupon(couponId);
+      setCoupons(updatedCoupons || []);
+      if (String(editingCouponId) === String(couponId)) {
+        resetCouponForm();
+      }
+    } catch (error) {
+      console.error(error?.response?.data?.message || 'Failed to delete coupon');
+    }
+  };
+
   const statCards = [
     {
       title: 'Total Users',
@@ -275,7 +463,7 @@ const AdminPage = () => {
     {
       title: 'Total Orders',
       caption: 'Across all channels',
-      value: orders.length,
+      value: filteredOrders.length,
       tint: 'from-sky-50 to-sky-100/70 border-sky-200',
       iconWrap: 'bg-sky-500/10 text-sky-600',
       icon: ShoppingCart,
@@ -290,7 +478,7 @@ const AdminPage = () => {
     },
     {
       title: 'Revenue',
-      caption: 'Gross sales',
+      caption: `${analyticsWindow.toUpperCase()} gross sales`,
       value: Math.round(revenue),
       prefix: 'Rs ',
       tint: 'from-amber-50 to-amber-100/70 border-amber-200',
@@ -329,6 +517,33 @@ const AdminPage = () => {
 
         {tab === 'dashboard' && (
           <>
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Analytics Window</h2>
+                  <p className="text-sm text-slate-500">Choose the period for KPI calculations</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { key: '7d', label: 'Last 7 Days' },
+                    { key: '30d', label: 'Last 30 Days' },
+                    { key: '90d', label: 'Last 90 Days' },
+                    { key: 'all', label: 'All Time' },
+                  ].map((item) => (
+                    <Button
+                      key={item.key}
+                      type="button"
+                      variant={analyticsWindow === item.key ? 'dark' : 'secondary'}
+                      className="px-3 py-1.5 text-xs"
+                      onClick={() => setAnalyticsWindow(item.key)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {statCards.map((card, index) => {
                 const CardIcon = card.icon;
@@ -393,6 +608,61 @@ const AdminPage = () => {
                     <p className="text-xs font-medium uppercase tracking-wide text-amber-600">Revenue</p>
                     <p className="mt-2 text-lg font-semibold text-amber-900">Rs {Math.round(revenue).toLocaleString('en-IN')}</p>
                   </div>
+                  <div className="rounded-xl bg-sky-50 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-sky-600">Average Order Value</p>
+                    <p className="mt-2 text-lg font-semibold text-sky-900">Rs {averageOrderValue.toLocaleString('en-IN')}</p>
+                  </div>
+                  <div className="rounded-xl bg-emerald-50 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-emerald-600">Fulfillment Rate</p>
+                    <p className="mt-2 text-lg font-semibold text-emerald-900">{fulfillmentRate}% delivered</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-2">
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-slate-900">Top Selling Products</h2>
+                <p className="mt-1 text-sm text-slate-500">Based on units sold in selected window</p>
+
+                <div className="mt-4 space-y-3">
+                  {topSellingProducts.length === 0 && (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No product sales data in this period.</p>
+                  )}
+                  {topSellingProducts.map((item) => (
+                    <article key={item.id} className="rounded-xl border border-slate-200 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-800">{item.name}</p>
+                        <Badge variant="accent">{item.units} units</Badge>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500">Revenue: Rs {Math.round(item.revenue).toLocaleString('en-IN')}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-slate-900">Order Status Mix</h2>
+                <p className="mt-1 text-sm text-slate-500">Distribution of order outcomes</p>
+
+                <div className="mt-4 space-y-3">
+                  {orderStatusBreakdown.length === 0 && (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No order status data available.</p>
+                  )}
+                  {orderStatusBreakdown.map((item) => (
+                    <div key={item.status} className="rounded-xl border border-slate-200 p-4">
+                      <div className="mb-2 flex items-center justify-between text-sm">
+                        <span className="font-medium text-slate-700">{item.status}</span>
+                        <span className="font-semibold text-slate-900">{item.count}</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-indigo-500"
+                          style={{ width: `${Math.max((item.count / Math.max(filteredOrders.length, 1)) * 100, 6)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </section>
             </div>
@@ -900,7 +1170,179 @@ const AdminPage = () => {
           </>
         )}
 
-        {tab !== 'dashboard' && tab !== 'products' && tab !== 'orders' && tab !== 'categories' && (
+        {tab === 'coupons' && (
+          <>
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+              <div className="mb-6">
+                <h2 className="text-2xl font-semibold text-slate-900">Coupon Management</h2>
+                <p className="mt-2 text-sm text-slate-500">Create and manage coupon discounts used in checkout.</p>
+              </div>
+
+              <form onSubmit={submitCoupon} className="space-y-5">
+                <h3 className="text-lg font-semibold text-slate-900">{isEditingCoupon ? 'Edit Coupon' : 'Create Coupon'}</h3>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Coupon Code</label>
+                    <input
+                      className={`rd-input w-full ${couponErrors.code ? 'border-red-500 focus:ring-1 focus:ring-red-500/30' : ''}`}
+                      value={couponForm.code}
+                      disabled={isEditingCoupon}
+                      onChange={(event) => setCouponForm((prev) => ({ ...prev, code: event.target.value.toUpperCase() }))}
+                      placeholder="e.g. DROP10"
+                    />
+                    {couponErrors.code && <p className="mt-1 text-xs text-red-600">{couponErrors.code}</p>}
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Discount Percentage</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="80"
+                      className={`rd-input w-full ${couponErrors.discountPercentage ? 'border-red-500 focus:ring-1 focus:ring-red-500/30' : ''}`}
+                      value={couponForm.discountPercentage}
+                      onChange={(event) => setCouponForm((prev) => ({ ...prev, discountPercentage: event.target.value }))}
+                      placeholder="10"
+                    />
+                    {couponErrors.discountPercentage && <p className="mt-1 text-xs text-red-600">{couponErrors.discountPercentage}</p>}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Valid From (optional)</label>
+                    <input
+                      type="datetime-local"
+                      className="rd-input w-full"
+                      value={couponForm.validFrom}
+                      onChange={(event) => setCouponForm((prev) => ({ ...prev, validFrom: event.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Valid To (optional)</label>
+                    <input
+                      type="datetime-local"
+                      className={`rd-input w-full ${couponErrors.validTo ? 'border-red-500 focus:ring-1 focus:ring-red-500/30' : ''}`}
+                      value={couponForm.validTo}
+                      onChange={(event) => setCouponForm((prev) => ({ ...prev, validTo: event.target.value }))}
+                    />
+                    {couponErrors.validTo && <p className="mt-1 text-xs text-red-600">{couponErrors.validTo}</p>}
+                  </div>
+                </div>
+
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={couponForm.active}
+                    onChange={(event) => setCouponForm((prev) => ({ ...prev, active: event.target.checked }))}
+                  />
+                  Coupon is active
+                </label>
+
+                <div className="flex flex-wrap gap-3">
+                  <Button type="submit" className="w-full md:w-auto">
+                    {isEditingCoupon ? 'Update Coupon' : 'Create Coupon'}
+                  </Button>
+                  {isEditingCoupon && (
+                    <Button type="button" variant="secondary" className="w-full md:w-auto" onClick={resetCouponForm}>
+                      Cancel Edit
+                    </Button>
+                  )}
+                </div>
+              </form>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-2xl font-semibold text-slate-900">Available Coupons</h2>
+                <Badge variant="accent">{coupons.length} total</Badge>
+              </div>
+
+              {loadingCoupons ? (
+                <p className="text-sm text-slate-500">Loading coupons...</p>
+              ) : (
+                <>
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 hidden md:block">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50">
+                          <th className="px-6 py-4 text-sm font-semibold text-slate-700">Code</th>
+                          <th className="px-6 py-4 text-sm font-semibold text-slate-700">Discount</th>
+                          <th className="px-6 py-4 text-sm font-semibold text-slate-700">Active</th>
+                          <th className="px-6 py-4 text-sm font-semibold text-slate-700">Usage</th>
+                          <th className="px-6 py-4 text-sm font-semibold text-slate-700">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {coupons.map((coupon) => (
+                          <tr key={coupon.id} className="border-b border-slate-100 transition-colors hover:bg-slate-50/70">
+                            <td className="px-6 py-4 text-sm font-semibold text-slate-900">{coupon.code}</td>
+                            <td className="px-6 py-4 text-sm text-slate-700">{coupon.discountPercentage}%</td>
+                            <td className="px-6 py-4 text-sm">
+                              <Badge variant={coupon.active ? 'success' : 'danger'}>{coupon.active ? 'ACTIVE' : 'INACTIVE'}</Badge>
+                            </td>
+                            <td className="px-6 py-4 text-sm text-slate-700">{coupon.usageCount || 0}</td>
+                            <td className="px-6 py-4 text-sm">
+                              <div className="flex flex-wrap gap-2">
+                                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEditCoupon(coupon)}>
+                                  Edit
+                                </Button>
+                                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => toggleCouponStatus(coupon)}>
+                                  {coupon.active ? 'Disable' : 'Enable'}
+                                </Button>
+                                <Button variant="dark" className="px-3 py-1 text-xs" onClick={() => deleteCoupon(coupon.id)}>
+                                  Delete
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {!coupons.length && (
+                          <tr>
+                            <td colSpan={5} className="px-6 py-6 text-center text-sm text-slate-500">No coupons found.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="space-y-3 md:hidden">
+                    {!coupons.length && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                        No coupons found.
+                      </div>
+                    )}
+                    {coupons.map((coupon) => (
+                      <article key={coupon.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-slate-900">{coupon.code}</p>
+                          <Badge variant={coupon.active ? 'success' : 'danger'}>{coupon.active ? 'ACTIVE' : 'INACTIVE'}</Badge>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-600">{coupon.discountPercentage}% OFF</p>
+                        <p className="mt-1 text-xs text-slate-500">Used {coupon.usageCount || 0} times</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEditCoupon(coupon)}>
+                            Edit
+                          </Button>
+                          <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => toggleCouponStatus(coupon)}>
+                            {coupon.active ? 'Disable' : 'Enable'}
+                          </Button>
+                          <Button variant="dark" className="px-3 py-1 text-xs" onClick={() => deleteCoupon(coupon.id)}>
+                            Delete
+                          </Button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          </>
+        )}
+
+        {tab !== 'dashboard' && tab !== 'products' && tab !== 'orders' && tab !== 'categories' && tab !== 'coupons' && (
           <section className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <Package className="mx-auto text-slate-400" size={32} />
             <h2 className="mt-4 text-xl font-semibold text-slate-900">Section Not Found</h2>

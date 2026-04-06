@@ -219,12 +219,18 @@ export const RocketDropProvider = ({ children }) => {
         dispatch({ type: 'SYNC_DB', payload: { wishlist } });
       },
 
-      async placeOrder(addressId) {
-        const orderData = { addressId };
+      async placeOrder(payload) {
+        const orderData = typeof payload === 'object' && payload !== null
+          ? payload
+          : { addressId: payload };
         await rocketdropService.placeOrder(orderData);
         const orders = await rocketdropService.getOrders();
         const cart = await rocketdropService.getCart();
         dispatch({ type: 'SYNC_DB', payload: { orders, cart } });
+      },
+
+      async validateCoupon(code, subtotal) {
+        return rocketdropService.validateCoupon(code, subtotal);
       },
 
       async adminAddProduct(payload) {
@@ -283,6 +289,25 @@ export const RocketDropProvider = ({ children }) => {
         await rocketdropService.adminUpdateOrderStatus(orderId, status);
         const orders = await rocketdropService.adminGetOrders();
         dispatch({ type: 'SYNC_DB', payload: { orders } });
+      },
+
+      async adminGetCoupons() {
+        return rocketdropService.adminGetCoupons();
+      },
+
+      async adminCreateCoupon(payload) {
+        await rocketdropService.adminCreateCoupon(payload);
+        return rocketdropService.adminGetCoupons();
+      },
+
+      async adminUpdateCoupon(couponId, payload) {
+        await rocketdropService.adminUpdateCoupon(couponId, payload);
+        return rocketdropService.adminGetCoupons();
+      },
+
+      async adminDeleteCoupon(couponId) {
+        await rocketdropService.adminDeleteCoupon(couponId);
+        return rocketdropService.adminGetCoupons();
       },
     };
 

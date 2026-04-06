@@ -105,6 +105,17 @@ const normalizeAddress = (address = {}) => {
   };
 };
 
+const normalizeCoupon = (coupon = {}) => ({
+  ...coupon,
+  id: normalizeId(coupon.id),
+  code: String(coupon.code || '').toUpperCase(),
+  discountPercentage: toNumber(coupon.discountPercentage, 0),
+  active: Boolean(coupon.active),
+  usageCount: toNumber(coupon.usageCount, 0),
+  validFrom: coupon.validFrom || null,
+  validTo: coupon.validTo || null,
+});
+
 const normalizeUser = (user = {}) => {
   if (!user) return null;
 
@@ -323,8 +334,23 @@ export const rocketdropService = {
   },
 
   async placeOrder(orderData) {
-    const response = await api.post('/orders', { addressId: orderData.addressId });
+    const response = await api.post('/orders', {
+      addressId: orderData.addressId,
+      ...(orderData.couponCode ? { couponCode: orderData.couponCode } : {}),
+    });
     return normalizeOrder(response.data);
+  },
+
+  async getActiveCoupons() {
+    const response = await api.get('/coupons');
+    return (response.data || []).map(normalizeCoupon);
+  },
+
+  async validateCoupon(code, subtotal) {
+    const response = await api.get('/coupons/validate', {
+      params: { code, subtotal },
+    });
+    return response.data || {};
   },
 
   async getSimilarProducts(productId) {
@@ -478,6 +504,26 @@ export const rocketdropService = {
   async adminUpdateOrderStatus(id, status) {
     const response = await api.put(`/orders/${id}/status`, { status });
     return normalizeOrder(response.data);
+  },
+
+  async adminGetCoupons() {
+    const response = await api.get('/admin/coupons');
+    return (response.data || []).map(normalizeCoupon);
+  },
+
+  async adminCreateCoupon(payload) {
+    const response = await api.post('/admin/coupons', payload);
+    return normalizeCoupon(response.data);
+  },
+
+  async adminUpdateCoupon(couponId, payload) {
+    const response = await api.put(`/admin/coupons/${couponId}`, payload);
+    return normalizeCoupon(response.data);
+  },
+
+  async adminDeleteCoupon(couponId) {
+    await api.delete(`/admin/coupons/${couponId}`);
+    return true;
   },
 
   async saveDb(db) {

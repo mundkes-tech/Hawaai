@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, LayoutDashboard, Package, ShoppingBag, Tags, Menu, X } from 'lucide-react';
+import { Home, LayoutDashboard, Package, ShoppingBag, Tags, Percent, Menu, X } from 'lucide-react';
 import MainLayout from './MainLayout';
 
 const links = [
@@ -8,6 +8,7 @@ const links = [
   { to: '/admin?tab=products', icon: Package, label: 'Products' },
   { to: '/admin?tab=orders', icon: ShoppingBag, label: 'Orders' },
   { to: '/admin?tab=categories', icon: Tags, label: 'Categories' },
+  { to: '/admin?tab=coupons', icon: Percent, label: 'Coupons' },
 ];
 
 const SidebarContent = ({ activePath, closeMobileMenu }) => (
