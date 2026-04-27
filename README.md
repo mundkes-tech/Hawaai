@@ -1,6 +1,6 @@
-# RocketDrop
+# Hawaai
 
-RocketDrop is a full-stack, real-time e-commerce platform for limited product drops featuring JWT-secured auth, live countdown and queue updates, smart product discovery, cart/checkout/orders, and a complete admin console for catalog, image, and order management.
+Hawaai is a full-stack, real-time e-commerce platform for limited product drops featuring JWT-secured auth, live countdown and queue updates, smart product discovery, cart/checkout/orders, and a complete admin console for catalog, image, and order management.
 
 [![Frontend](https://img.shields.io/badge/Frontend-React%2018-61dafb?logo=react&logoColor=white)](#tech-stack-studio)
 [![Backend](https://img.shields.io/badge/Backend-Spring%20Boot%204-6db33f?logo=springboot&logoColor=white)](#tech-stack-studio)
